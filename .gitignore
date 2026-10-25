@@ -1,0 +1,23 @@
+# Executables and intermediates from `goose build` (it writes them beside the source)
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+*.lib
+*.a
+*.dSYM/
+test/test_fft
+examples/spectrum
+examples/filter
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Benchmark outputs and the reference libraries built for them
+bench/*.csv
+bench/log_*.txt
+bench/third_party/
