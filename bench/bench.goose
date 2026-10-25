@@ -67,12 +67,23 @@ fn bench_complex(n: i64, r: rng&) {
     time_it("fft", n) { fft::execute_into(p, x, y, false); sink += y[0].re; };
 }
 
+fn bench_real(n: i64, r: rng&) {
+    var x: f64[>..] = [];
+    for i in n { x.push(2.0 * r.rand_flt() - 1.0); }
+    let p = fft::plan_real(n);
+    var y: fft::complex[>..] = [];
+    y.resize(n / 2 + 1, fft::complex { 0.0, 0.0 });
+    time_it("rfft", n) { fft::execute_real_into(p, x, y); sink += y[0].re; };
+}
+
 fn main() {
     csv.append("kind,n,seconds\n");
     var r = rng { 42 };
     for n in POW2 { bench_complex(n, r); }
     for n in MIXED { bench_complex(n, r); }
     for n in PRIME { bench_complex(n, r); }
+    for n in POW2 { bench_real(n, r); }
+    for n in MIXED { bench_real(n, r); }
     let argv = args();
     let path = if argv.len > 1 { argv[1] } else { "bench_goose.csv" };
     if !write_file(path, csv) { abort(str("cannot write ", path)); }

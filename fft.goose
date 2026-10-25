@@ -86,7 +86,8 @@ struct plan {
     blue: bool,                 // Bluestein: chirp and the filter's transform, four complex to a cv4
     chirp_off: i64,
     filt_off: i64,
-    real_off: i64,              // a real plan's post-processing twiddles
+    real_off: i64,              // a real plan's twiddles w^k, k = 0..n/4, four to a cv4
+    realv_off: i64,             // the same from k = 1, four consecutive k to a cv4 for the vector loops
     work_off: i64,              // scratch for transform: zt, then two block buffers
     data: cv4[>..],
 }
@@ -257,7 +258,7 @@ fn mid_twiddle(n1: i64, len: i64, g: i64, k2: i64) -> cv4 {
 fn new_plan(n: i64, kind: i64) -> plan {
     let none = stages { len: 0, count: 0, radix: [0; MAX_STAGES], tw: [0; MAX_STAGES] };
     return plan { n: n, kind: kind, cn: n, len: n, n1: 0, n2: 0, g1: 0, g2: 0, wa: 0, wb: 0, sa: none, sb: none,
-                  codelets: false, mid_off: 0, blue: false, chirp_off: 0, filt_off: 0, real_off: 0, work_off: 0, data: [] };
+                  codelets: false, mid_off: 0, blue: false, chirp_off: 0, filt_off: 0, real_off: 0, realv_off: 0, work_off: 0, data: [] };
 }
 
 // Complex numbers stored four to a cv4 in a plan's data.
@@ -725,7 +726,7 @@ fn load4(e: complex[:], swap: bool) -> cv4 {
     return if swap { cv4 { im, re } } else { cv4 { re, im } };
 }
 
-simd fn load_a(x: complex[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: cv4[:]) {
+inline fn load_a_in(x: complex[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: cv4[:]) {
     assert(a.len == w * n2 && x.len == n1 * n2);
     // Full groups: four complex numbers to a cv4.
     let full = max(0, min(w, n1 / 4 - c0));
@@ -747,10 +748,11 @@ simd fn load_a(x: complex[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: 
         }
     }
 }
+simd fn load_a(x: complex[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: cv4[:]) { load_a_in(x, swap, n1, n2, c0, w, a); }
 
 // Block column q (j1 = 4*(c0+q) + lane) at point k2 is at q + w*k2. Times
 // w^(j1 k2), four k2 at a time are transposed into four rows of zt.
-simd fn twiddle_transpose(p, c0: i64, w: i64, a: cv4[:], z: cv4[:]) {
+inline fn twiddle_transpose_in(p, c0: i64, w: i64, a: cv4[:], z: cv4[:]) {
     let n1 = p.n1;
     let n2 = p.n2;
     let g2 = p.g2;
@@ -804,8 +806,9 @@ simd fn twiddle_transpose(p, c0: i64, w: i64, a: cv4[:], z: cv4[:]) {
         }
     }
 }
+simd fn twiddle_transpose(p, c0: i64, w: i64, a: cv4[:], z: cv4[:]) { twiddle_transpose_in(p, c0, w, a, z); }
 
-simd fn load_b(z: cv4[:], g2: i64, n1: i64, d0: i64, w: i64, b: cv4[:]) {
+inline fn load_b_in(z: cv4[:], g2: i64, n1: i64, d0: i64, w: i64, b: cv4[:]) {
     assert(b.len == w * n1);
     for j1 in n1 {
         let src = z[d0 + g2 * j1..d0 + g2 * j1 + w];
@@ -814,6 +817,7 @@ simd fn load_b(z: cv4[:], g2: i64, n1: i64, d0: i64, w: i64, b: cv4[:]) {
         for q in w { d[q] = src[q]; }
     }
 }
+simd fn load_b(z: cv4[:], g2: i64, n1: i64, d0: i64, w: i64, b: cv4[:]) { load_b_in(z, g2, n1, d0, w, b); }
 
 fn store4(e: complex[:], v: cv4) {
     e[0] = complex { v.re.a, v.im.a };
@@ -822,7 +826,7 @@ fn store4(e: complex[:], v: cv4) {
     e[3] = complex { v.re.d, v.im.d };
 }
 
-simd fn store_b(y: complex[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64, w: i64, b: cv4[:]) {
+inline fn store_b_in(y: complex[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64, w: i64, b: cv4[:]) {
     assert(b.len == w * n1 && y.len == n1 * n2);
     let sc = splat(scale);
     let full = max(0, min(w, n2 / 4 - d0));
@@ -848,6 +852,7 @@ simd fn store_b(y: complex[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64
         }
     }
 }
+simd fn store_b(y: complex[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64, w: i64, b: cv4[:]) { store_b_in(y, swap, scale, n1, n2, d0, w, b); }
 
 // Real arrays read and written as complex pairs (x[2k], x[2k+1]): how a real
 // transform of even length n packs its input into n/2 complex points.
@@ -857,7 +862,7 @@ fn load8(e: f64[:], swap: bool) -> cv4 {
     return if swap { cv4 { im, re } } else { cv4 { re, im } };
 }
 
-simd fn load_a(x: f64[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: cv4[:]) {
+inline fn load_a_in(x: f64[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: cv4[:]) {
     assert(a.len == w * n2 && x.len == 2 * n1 * n2);
     let full = max(0, min(w, n1 / 4 - c0));
     for j2 in n2 {
@@ -877,6 +882,7 @@ simd fn load_a(x: f64[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: cv4[
         }
     }
 }
+simd fn load_a(x: f64[:], swap: bool, n1: i64, n2: i64, c0: i64, w: i64, a: cv4[:]) { load_a_in(x, swap, n1, n2, c0, w, a); }
 
 fn store8(e: f64[:], v: cv4) {
     e[0] = v.re.a; e[1] = v.im.a;
@@ -885,7 +891,7 @@ fn store8(e: f64[:], v: cv4) {
     e[6] = v.re.d; e[7] = v.im.d;
 }
 
-simd fn store_b(y: f64[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64, w: i64, b: cv4[:]) {
+inline fn store_b_in(y: f64[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64, w: i64, b: cv4[:]) {
     assert(b.len == w * n1 && y.len == 2 * n1 * n2);
     let sc = splat(scale);
     let full = max(0, min(w, n2 / 4 - d0));
@@ -908,12 +914,33 @@ simd fn store_b(y: f64[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64, w:
         }
     }
 }
+simd fn store_b(y: f64[:], swap: bool, scale: f64, n1: i64, n2: i64, d0: i64, w: i64, b: cv4[:]) { store_b_in(y, swap, scale, n1, n2, d0, w, b); }
 
 // The number of complex points in an array the core reads or writes.
 fn points(x: complex[:]) -> i64 { x.len }
 fn points(x: f64[:]) -> i64 { x.len / 2 }
 
 simd fn run_codelet(v: cv4[:]) { codelet(v); }
+
+// The whole transform when n1 and n2 both have codelets (lengths up to 64):
+// both steps in one function, so the moves and codelets inline into it
+// rather than each being a call.
+simd fn small_transform(p, x, y, inverse: bool, scale: f64, z: cv4[:], a: cv4[:]) {
+    let n1 = p.n1;
+    let n2 = p.n2;
+    for g in p.g1 {
+        let v = a[..n2];
+        load_a_in(x, inverse, n1, n2, g, 1, v);
+        codelet(v);
+        twiddle_transpose_in(p, g, 1, v, z);
+    }
+    for gk in p.g2 {
+        let v = a[..n1];
+        load_b_in(z, p.g2, n1, gk, 1, v);
+        codelet(v);
+        store_b_in(y, inverse, scale, n1, n2, gk, 1, v);
+    }
+}
 
 // The core transform of length p.len from x to y, each a complex[:] or a real
 // array read as complex pairs: forward and unnormalized, or with `inverse`
@@ -933,18 +960,7 @@ fn transform(p, x, y, inverse: bool, scale: f64) {
     let t = work[zn + PAD + bs..zn + PAD + bs + cap];
     if p.codelets {
         // Each column group straight through its codelet: one sweep a step.
-        for g in g1 {
-            let v = a[..n2];
-            load_a(x, inverse, n1, n2, g, 1, v);
-            run_codelet(v);
-            twiddle_transpose(p, g, 1, v, z);
-        }
-        for gk in g2 {
-            let v = a[..n1];
-            load_b(z, g2, n1, gk, 1, v);
-            run_codelet(v);
-            store_b(y, inverse, scale, n1, n2, gk, 1, v);
-        }
+        small_transform(p, x, y, inverse, scale, z, a);
         return;
     }
     var c0 = 0;
@@ -1066,7 +1082,67 @@ fn plan_real(n: i64) -> plan {
     for k in h / 2 + 1 { let c, s = root(k, n); tw.push(complex { c, s }); }
     p.real_off = p.data.len;
     put_complex(p.data, tw);
+    p.realv_off = p.data.len;
+    put_complex(p.data, tw[1..]);
     return p;
+}
+
+fn reversed(v: cv4) -> cv4 { cv4 { v4 { v.re.d, v.re.c, v.re.b, v.re.a }, v4 { v.im.d, v.im.c, v.im.b, v.im.a } } }
+
+// The real transform's last pass, four k at a time from k = 1, each paired
+// with h - k, while the two groups of four stay apart; returns the first k
+// left for the scalar loop.
+simd fn post_real(y: complex[:], h: i64, tw: cv4[:]) -> i64 {
+    let half = splat(0.5);
+    var k = 1;
+    var i = 0;
+    while 2 * k + 6 < h && i < tw.len {
+        let fa = y[k..k + 4];
+        let fb = y[h - k - 3..h - k + 1];
+        assert(fa.len == 4 && fb.len == 4);
+        let a = load4(fa, false);
+        let b = reversed(load4(fb, false));
+        let w = tw[i];
+        let er = half * (a.re + b.re);
+        let ei = half * (a.im - b.im);
+        let or = half * (a.im + b.im);
+        let oi = half * (b.re - a.re);
+        let tr = w.re * or - w.im * oi;
+        let ti = w.re * oi + w.im * or;
+        store4(fa, cv4 { er + tr, ei + ti });
+        store4(fb, reversed(cv4 { er - tr, ti - ei }));
+        k += 4;
+        i++;
+    }
+    return k;
+}
+
+// The inverse's first pass, x to z, the same way; returns the first k left.
+simd fn pre_real(x: complex[:], z: complex[:], h: i64, tw: cv4[:]) -> i64 {
+    let half = splat(0.5);
+    var k = 1;
+    var i = 0;
+    while 2 * k + 6 < h && i < tw.len {
+        let fa = x[k..k + 4];
+        let fb = x[h - k - 3..h - k + 1];
+        let za = z[k..k + 4];
+        let zb = z[h - k - 3..h - k + 1];
+        assert(fa.len == 4 && fb.len == 4 && za.len == 4 && zb.len == 4);
+        let a = load4(fa, false);
+        let b = reversed(load4(fb, false));
+        let w = tw[i];
+        let er = half * (a.re + b.re);
+        let ei = half * (a.im - b.im);
+        let dr = half * (a.re - b.re);
+        let di = half * (a.im + b.im);
+        let or = dr * w.re + di * w.im;
+        let oi = di * w.re - dr * w.im;
+        store4(za, cv4 { er - oi, ei + or });
+        store4(zb, reversed(cv4 { er + oi, or - ei }));
+        k += 4;
+        i++;
+    }
+    return k;
 }
 
 // The complex core of p (length p.cn) from x to y.
@@ -1106,7 +1182,9 @@ fn execute_real_into(p, x: f64[:], y: complex[:]) {
     let z0 = y[0];
     y[0] = complex { z0.re + z0.im, 0.0 };
     y[h] = complex { z0.re - z0.im, 0.0 };
-    for k in 1..h / 2 + 1 {
+    let tv = p.data[p.realv_off..p.realv_off + (h / 2 + 3) / 4];
+    let k0 = post_real(y, h, tv);
+    for k in k0..h / 2 + 1 {
         let a = y[k];
         let b = y[h - k];
         // E = (a + conj b) / 2, O = (a - conj b) / 2i, X[k] = E + w^k O and
@@ -1146,7 +1224,10 @@ fn execute_real_inverse_into(p, x: complex[:], y: f64[:]) {
     z.resize(h, complex { 0.0, 0.0 });
     // E[k] = (X[k] + conj X[h-k]) / 2, O[k] = (X[k] - conj X[h-k]) w^-k / 2,
     // Z[k] = E[k] + i O[k], and Z[h-k] = conj E[k] + i conj O[k].
+    let tv = p.data[p.realv_off..p.realv_off + (h / 2 + 3) / 4];
+    let k0 = pre_real(x, z, h, tv);
     for k in h / 2 + 1 {
+        if k > 0 && k < k0 { continue; }
         let a = if k == 0 { complex { x[0].re, 0.0 } } else { x[k] };
         let b = if k == 0 { complex { x[h].re, 0.0 } } else { x[h - k] };
         let er = 0.5 * (a.re + b.re);
