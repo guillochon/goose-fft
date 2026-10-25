@@ -8,7 +8,8 @@ split-radix decomposition (radix 2 and 4 butterflies, sizes that are powers
 of two) or, for other sizes, as a mixed-radix Cooley-Tukey decomposition
 over radices 2, 3, 4 and 5; constants are folded, multiplications by
 trivial twiddles (1, -1, +-i, (+-1 +-i)/sqrt 2) become additions, signs are
-pushed outward, and equal subexpressions are shared. The result is printed
+pushed outward, equal subexpressions are shared, and a multiplication that
+only one addition uses fuses into it (fma4 and its kin, in fft.goose). The result is printed
 as one let per operation, which the C compiler schedules and vectorizes.
 """
 import cmath
@@ -230,21 +231,56 @@ def emit(n):
     for re, im in y:
         mark(re[0])
         mark(im[0])
+    # A multiplication by a constant that only one addition uses fuses into
+    # it: fma4 (k x + b), fms4 (k x - b) or fnma4 (b - k x).
+    uses = {}
+    for i in used:
+        op = d.nodes[i]
+        kids = [op[1], op[2]] if op[0] in ("add", "sub") else [op[2]] if op[0] == "mul" else []
+        for c in kids:
+            uses[c] = uses.get(c, 0) + 1
+    for re, im in y:
+        for v in (re[0], im[0]):
+            if v is not None:
+                uses[v] = uses.get(v, 0) + 1
+    fused = {}                       # add node -> (index of the mul operand, mul node)
+    absorbed = set()
+    for i in sorted(used):
+        op = d.nodes[i]
+        if op[0] not in ("add", "sub"):
+            continue
+        for side in (2, 1):
+            c = op[side]
+            if d.nodes[c][0] == "mul" and uses.get(c) == 1 and c not in absorbed:
+                fused[i] = (side, c)
+                absorbed.add(c)
+                break
     lines = []
-    adds = muls = 0
+    adds = muls = fmas = 0
     names = {}
     for key, (name, c) in sorted(d.consts.items(), key=lambda kv: kv[1][0]):
         if any(d.nodes[i][0] == "mul" and d.nodes[i][1] == key for i in used):
             lines.append(f"    let {name} = splat({c!r});")
     for i, op in enumerate(d.nodes):
-        if i not in used:
+        if i not in used or i in absorbed:
             continue
         if op[0] == "in":
             names[i] = f"a[{op[1]}].{op[2]}"
             continue
         nm = f"t{i}"
         names[i] = nm
-        if op[0] == "add":
+        if i in fused:
+            side, m = fused[i]
+            k, x = d.consts[d.nodes[m][1]][0], names[d.nodes[m][2]]
+            other = names[op[3 - side]]
+            if op[0] == "add":
+                lines.append(f"    let {nm} = fma4({k}, {x}, {other});")
+            elif side == 2:
+                lines.append(f"    let {nm} = fnma4({k}, {x}, {other});")
+            else:
+                lines.append(f"    let {nm} = fms4({k}, {x}, {other});")
+            fmas += 1
+        elif op[0] == "add":
             lines.append(f"    let {nm} = {names[op[1]]} + {names[op[2]]};")
             adds += 1
         elif op[0] == "sub":
@@ -274,7 +310,7 @@ def emit(n):
     text = (f"// {n} points: {adds} additions and {muls} multiplications per lane.\n"
             f"inline fn dft{n}(a: cv4[:]) {{\n    assert(a.len == {n});\n"
             + "\n".join(loads) + "\n" + body + "\n" + "\n".join(out_lines) + "\n}\n")
-    return text, adds, muls
+    return text, adds, muls, fmas
 
 
 def main():
@@ -286,9 +322,9 @@ def main():
              "// the one for a.len, and `has_codelet(n)` says whether there is one.\n\n"
              "namespace fft;\n"]
     for n in sizes:
-        text, adds, muls = emit(n)
+        text, adds, muls, fmas = emit(n)
         parts.append("\n" + text)
-        print(f"dft{n}: {adds} adds, {muls} muls", file=sys.stderr)
+        print(f"dft{n}: {adds} adds, {muls} muls, {fmas} fmas", file=sys.stderr)
     cases = "\n".join(f"        {n} => dft{n}(a)," for n in sizes)
     parts.append("\nfn has_codelet(n: i64) -> bool {\n    match n {\n"
                  + "\n".join(f"        {n} => true," for n in sizes)

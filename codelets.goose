@@ -19,7 +19,7 @@ inline fn dft2(a: cv4[:]) {
     a[1] = cv4 { t6, t7 };
 }
 
-// 3 points: 12 additions and 4 multiplications per lane.
+// 3 points: 10 additions and 2 multiplications per lane.
 inline fn dft3(a: cv4[:]) {
     assert(a.len == 3);
     let p0 = a[0];
@@ -33,10 +33,8 @@ inline fn dft3(a: cv4[:]) {
     let t9 = p1.im - p2.im;
     let t10 = p0.re + t6;
     let t11 = p0.im + t7;
-    let t12 = k0 * t6;
-    let t13 = k0 * t7;
-    let t14 = p0.re - t12;
-    let t15 = p0.im - t13;
+    let t14 = fnma4(k0, t6, p0.re);
+    let t15 = fnma4(k0, t7, p0.im);
     let t16 = k1 * t9;
     let t17 = k1 * t8;
     let t18 = t14 + t16;
@@ -77,7 +75,7 @@ inline fn dft4(a: cv4[:]) {
     a[3] = cv4 { t22, t23 };
 }
 
-// 5 points: 32 additions and 16 multiplications per lane.
+// 5 points: 20 additions and 4 multiplications per lane.
 inline fn dft5(a: cv4[:]) {
     assert(a.len == 5);
     let p0 = a[0];
@@ -101,38 +99,26 @@ inline fn dft5(a: cv4[:]) {
     let t19 = p0.im + t11;
     let t20 = t12 + t18;
     let t21 = t13 + t19;
-    let t22 = k0 * t10;
-    let t23 = k0 * t11;
-    let t24 = p0.re + t22;
-    let t25 = p0.im + t23;
+    let t24 = fma4(k0, t10, p0.re);
+    let t25 = fma4(k0, t11, p0.im);
     let t26 = k1 * t15;
     let t27 = k1 * t14;
-    let t28 = k2 * t12;
-    let t29 = k2 * t13;
-    let t30 = t24 - t28;
-    let t31 = t25 - t29;
-    let t32 = k3 * t17;
-    let t33 = k3 * t16;
-    let t34 = t26 + t32;
-    let t35 = t27 + t33;
+    let t30 = fnma4(k2, t12, t24);
+    let t31 = fnma4(k2, t13, t25);
+    let t34 = fma4(k3, t17, t26);
+    let t35 = fma4(k3, t16, t27);
     let t36 = t30 + t34;
     let t37 = t31 - t35;
     let t38 = t30 - t34;
     let t39 = t31 + t35;
-    let t40 = k2 * t10;
-    let t41 = k2 * t11;
-    let t42 = p0.re - t40;
-    let t43 = p0.im - t41;
+    let t42 = fnma4(k2, t10, p0.re);
+    let t43 = fnma4(k2, t11, p0.im);
     let t44 = k3 * t15;
-    let t45 = k3 * t14;
-    let t46 = k0 * t12;
-    let t47 = k0 * t13;
-    let t48 = t42 + t46;
-    let t49 = t43 + t47;
-    let t50 = k1 * t17;
+    let t48 = fma4(k0, t12, t42);
+    let t49 = fma4(k0, t13, t43);
     let t51 = k1 * t16;
-    let t52 = t44 - t50;
-    let t53 = t51 - t45;
+    let t52 = fnma4(k1, t17, t44);
+    let t53 = fnma4(k3, t14, t51);
     let t54 = t48 + t52;
     let t55 = t49 + t53;
     let t56 = t48 - t52;
@@ -144,7 +130,7 @@ inline fn dft5(a: cv4[:]) {
     a[4] = cv4 { t38, t39 };
 }
 
-// 6 points: 40 additions and 16 multiplications per lane.
+// 6 points: 32 additions and 8 multiplications per lane.
 inline fn dft6(a: cv4[:]) {
     assert(a.len == 6);
     let p0 = a[0];
@@ -161,10 +147,8 @@ inline fn dft6(a: cv4[:]) {
     let t15 = p2.im - p4.im;
     let t16 = p0.re + t12;
     let t17 = p0.im + t13;
-    let t18 = k0 * t12;
-    let t19 = k0 * t13;
-    let t20 = p0.re - t18;
-    let t21 = p0.im - t19;
+    let t20 = fnma4(k0, t12, p0.re);
+    let t21 = fnma4(k0, t13, p0.im);
     let t22 = k1 * t15;
     let t23 = k1 * t14;
     let t24 = t20 + t22;
@@ -177,10 +161,8 @@ inline fn dft6(a: cv4[:]) {
     let t31 = p3.im - p5.im;
     let t32 = p1.re + t28;
     let t33 = p1.im + t29;
-    let t34 = k0 * t28;
-    let t35 = k0 * t29;
-    let t36 = p1.re - t34;
-    let t37 = p1.im - t35;
+    let t36 = fnma4(k0, t28, p1.re);
+    let t37 = fnma4(k0, t29, p1.im);
     let t38 = k1 * t31;
     let t39 = k1 * t30;
     let t40 = t36 + t38;
@@ -192,21 +174,17 @@ inline fn dft6(a: cv4[:]) {
     let t46 = t16 - t32;
     let t47 = t17 - t33;
     let t48 = k0 * t40;
-    let t49 = k1 * t41;
-    let t50 = t48 + t49;
+    let t50 = fma4(k1, t41, t48);
     let t51 = k0 * t41;
-    let t52 = k1 * t40;
-    let t53 = t51 - t52;
+    let t53 = fnma4(k1, t40, t51);
     let t54 = t24 + t50;
     let t55 = t25 + t53;
     let t56 = t24 - t50;
     let t57 = t25 - t53;
-    let t58 = k0 * t42;
     let t59 = k1 * t43;
-    let t60 = t59 - t58;
+    let t60 = fnma4(k0, t42, t59);
     let t61 = k0 * t43;
-    let t62 = k1 * t42;
-    let t63 = t61 + t62;
+    let t63 = fma4(k1, t42, t61);
     let t64 = t26 + t60;
     let t65 = t27 - t63;
     let t66 = t26 - t60;

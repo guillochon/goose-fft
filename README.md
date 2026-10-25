@@ -18,6 +18,14 @@ fn main() {
 Goose fetches the package the first time a program uses it. Pin a tag, as here, or a commit
 (`"guillochon/goose-fft@<commit>"`).
 
+**Requires `math::mul_add`**, which Goose gains with
+[aardappel/goose#79](https://github.com/aardappel/goose/pull/79) and no release has yet. Until one
+does, build Goose from that branch:
+
+```bash
+git clone -b mul-add https://github.com/guillochon/goose
+```
+
 ## Conventions
 
 - A complex number is `fft::complex { re, im }`, so a `complex[]` is laid out like C99's
@@ -70,7 +78,13 @@ Goose fetches the package the first time a program uses it. Pin a tag, as here, 
   runs). The Stockham passes autosort, so no bit-reversal pass is needed.
 - **Codelets.** Lengths up to 64 whose two factors are both 2, 3, 4, 5, 6 or 8 run each step as a
   generated straight-line codelet (`codelets.goose`, from `tools/gen_codelets.py`), with constants
-  folded and trivial twiddles turned into additions; both steps inline into one kernel.
+  folded, trivial twiddles turned into additions, and each multiplication by a constant fused into
+  the addition that uses it; both steps inline into one kernel.
+- **Fused multiply-adds.** The radix-3 and radix-5 butterflies, the general odd-radix pass, the
+  real transforms' passes and the codelets use `math::mul_add` (through lane-wise `fma4`, `fms4`
+  and `fnma4`), which rounds once where the code is built for FMA. The twiddle multiplies don't: on
+  this code clang packs the fused form into vectors less well, and it measured slower (see
+  Performance).
 - **Real transforms** of even length n are a complex transform of n/2 points of the packed
   samples, then one O(n) pass that separates the even and odd halves. Odd lengths go through the
   complex transform.
@@ -90,9 +104,11 @@ ahead of MSVC; `GOOSE_CC` or `--cc` picks another.
   fast build.
 - **Under MSVC:** `simd` does nothing, so enable AVX2 yourself: `CL="/arch:AVX2" goose build
   yourprogram.goose`. With gcc or clang outside clang-cl, the equivalent is `-march=x86-64-v3`.
-- **No FMA:** Goose turns floating-point contraction off in the C it generates, so results don't
-  depend on the compiler. FFTW's AVX2 kernels do use fused multiply-adds, which accounts for part
-  of the gap below.
+- **FMA:** Goose never contracts `a * b + c` on its own, so results don't depend on the compiler;
+  `math::mul_add` asks for the fused form explicitly. It fuses in the AVX2 and AVX-512 versions of
+  `simd fn`s under clang, and everywhere in a build for AVX2 (`/arch:AVX2`, `-march=x86-64-v3`) or
+  for arm64. Elsewhere (MSVC without `/arch:AVX2`, the in-process `goose run`) it rounds twice, and
+  the last bits of a transform differ accordingly.
 
 ## Performance
 
@@ -103,7 +119,7 @@ ahead of MSVC; `GOOSE_CC` or `--cc` picks another.
 | CPU | Intel Core i5-12600K (Alder Lake): 6 performance cores, 3.7 GHz base, 4.9 GHz turbo, 48 KB L1d and 1.25 MB L2 each; 20 MB shared L3 |
 | Memory | 32 GB DDR5-6200 |
 | OS | Windows 11 Home 23H2 (build 22631), High performance power plan |
-| Goose | v2026.3, compiled by clang-cl 22.1.3 (Visual Studio 2026) with `/O2 /arch:AVX2`. A plain `goose build` measured within 5% of that at every length. |
+| Goose | built from [aardappel/goose#79](https://github.com/aardappel/goose/pull/79) (commit 3d03680, adding `math::mul_add`), compiling with clang-cl 22.1.3 (Visual Studio 2026) and `/O2 /arch:AVX2`. A plain `goose build` measured within 8% of that at every length. |
 | FFTW | 3.3.10, built from source by the same clang-cl with `/O2 /arch:AVX2` and FFTW's AVX, AVX2 and FMA kernels (`bench/get_fftw.ps1`), out-of-place `FFTW_MEASURE` plans |
 | pocketfft | NumPy 2.2.6 and SciPy 1.16.0 on Python 3.12, `scipy.fft` with `workers=1` |
 | Pinning | Every run on logical CPU 4, a performance core |
@@ -121,29 +137,37 @@ Times in µs, single-threaded:
 | n | Goose | FFTW | NumPy | SciPy | Goose / FFTW |
 |---|---|---|---|---|---|
 | **complex** | | | | | |
-| 64 | 0.151 | 0.039 | 3.12 | 2.67 | 3.9× |
-| 1,024 | 2.65 | 0.95 | 8.43 | 6.15 | 2.8× |
-| 4,096 | 11.8 | 5.77 | 26.0 | 18.4 | 2.1× |
-| 65,536 | 292 | 197 | 998 | 760 | 1.5× |
-| 2²⁰ | 7,685 | 6,356 | 20,053 | 16,783 | 1.2× |
-| 1,000 | 2.99 | 1.14 | 8.81 | 5.96 | 2.6× |
-| 100,000 | 527 | 271 | 1,529 | 1,107 | 1.9× |
-| 1,000,000 | 7,654 | 6,912 | 17,338 | 13,402 | 1.1× |
-| 1,009 (prime) | 16.6 | 13.2 | 42.7 | 26.3 | 1.3× |
-| 10,007 (prime) | 204 | 125 | 679 | 263 | 1.6× |
+| 64 | 0.150 | 0.039 | 3.12 | 2.67 | 3.9× |
+| 1,024 | 2.75 | 0.95 | 8.43 | 6.15 | 2.9× |
+| 4,096 | 12.1 | 5.77 | 26.0 | 18.4 | 2.1× |
+| 65,536 | 295 | 197 | 998 | 760 | 1.5× |
+| 2²⁰ | 7,921 | 6,356 | 20,053 | 16,783 | 1.2× |
+| 1,000 | 2.84 | 1.14 | 8.81 | 5.96 | 2.5× |
+| 100,000 | 525 | 271 | 1,529 | 1,107 | 1.9× |
+| 1,000,000 | 7,593 | 6,912 | 17,338 | 13,402 | 1.1× |
+| 1,009 (prime) | 16.5 | 13.2 | 42.7 | 26.3 | 1.3× |
+| 10,007 (prime) | 195 | 125 | 679 | 263 | 1.6× |
 | **real** | | | | | |
-| 1,024 | 1.61 | 0.52 | 6.44 | 4.81 | 3.1× |
+| 1,024 | 1.59 | 0.52 | 6.44 | 4.81 | 3.1× |
 | 65,536 | 143 | 82.9 | 509 | 456 | 1.7× |
-| 2²⁰ | 4,309 | 2,858 | 10,623 | 9,830 | 1.5× |
-| 1,000,000 | 4,190 | 2,788 | 9,598 | 9,062 | 1.5× |
+| 2²⁰ | 4,009 | 2,858 | 10,623 | 9,830 | 1.4× |
+| 1,000,000 | 3,826 | 2,788 | 9,598 | 9,062 | 1.4× |
 
 In short:
-- **Against pocketfft through NumPy and SciPy**, Goose is faster at every length measured, 1.3–2.6×
+- **Against pocketfft through NumPy and SciPy**, Goose is faster at every length measured, 1.3–3.8×
   at lengths of 4,096 and up, where Python's call overhead no longer matters.
 - **Against FFTW**, Goose takes 1.1–1.7× FFTW's time on long transforms (2¹⁶ points and up) and
-  2–4× on short ones. FFTW's kernels use FMA, which Goose's C never does, and its codelets keep
-  transforms of up to 64 points in registers. In Goose those take passes through memory, as long
-  straight-line codelets compile poorly (see below).
+  2–4× on short ones. FFTW's codelets keep transforms of up to 64 points in registers; in Goose
+  those take passes through memory, as long straight-line codelets compile poorly (see below).
+
+**What FMA gained.** Against the same code with every `mul_add` written as a multiply and an add,
+on the same compiler: mixed-radix lengths (factors of 3 and 5) ran 4–9% faster as complex
+transforms and 7–20% faster as real ones; powers of two were unchanged, within 3%. Fusing the
+twiddle multiplies as well (`fms4`/`fma4` in every pass) made powers of two 10–14% *slower*: the
+radix-8 pass's struct arithmetic already reaches clang's SLP vectorizer half-packed (two-lane
+operations and spills alongside the four-lane ones), and the fused calls packed worse still. So
+this FFT is bound by how well the lanes vectorize and by moving data, not by its multiplies,
+unlike a matrix multiply, where `mul_add` gave goose-linalg 1.34×.
 
 How it got here, at n = 4,096 complex (FFTW: 5.8 µs):
 
@@ -154,6 +178,7 @@ How it got here, at n = 4,096 complex (FFTW: 5.8 µs):
 | Four-lane `v4` structs | 13.3 | Each butterfly is whole-struct arithmetic, which clang vectorizes with no overlap checks at all. |
 | Real and imaginary side by side (`cv4`), radix 8 | 12.6 | Half the pointers per pass, and radix 8 does 1.5× the work per load and store of radix 4. |
 | Small generated codelets, one kernel for lengths up to 64 | 11.8 | The 16- to 64-point codelets compiled to code with thousands of spills and scalar operations (clang's SLP vectorizer gives up on long blocks), so only those up to 8 points are used. |
+| `math::mul_add` in the odd radices, real passes and codelets | 12.1 | Unchanged here (within noise); 4–20% at mixed-radix lengths. |
 
 Tried and dropped: fusing step A's first pass with the load of x and step B's last pass with the
 store of y (20–45% slower: the extra strided loads inside the radix-8 butterfly cost more registers
@@ -177,8 +202,9 @@ python compare.py
 builds `bench_fftw.exe` against it. `run_bench.ps1` builds and runs the Goose benchmark, FFTW
 (measure and patient planning; patient planning of the long and prime lengths takes hours, and
 wasn't measured above) and NumPy/SciPy, each pinned to one core; `-Core` picks another,
-`-Only goose|fftw|numpy` runs one, and `-Flags` sets the C compiler flags for the Goose build.
-`bench/profile.goose` times the phases of one transform and `bench/sweep.goose` sweeps the block
+`-Only goose|fftw|numpy` runs one, and `-Flags` sets the C compiler flags for the Goose build (`none` for a plain build).
+`bench/quick.goose` times a few lengths for comparing variants, `bench/profile.goose` times the
+phases of one transform, and `bench/sweep.goose` sweeps the block
 size, for tuning.
 
 ## Tests
@@ -201,7 +227,8 @@ The suite runs 641 checks and exits 1 on any failure:
 - **2-D** transforms against a direct double sum, including 1×n, n×1 and odd shapes.
 - **Helpers** against hand-worked values, and `convolve` against the direct sum.
 
-The suite passes in-process and as native builds with clang-cl 22 and MSVC 19.51, plain and with
+The suite passes on Goose built from aardappel/goose#79, in-process (where `mul_add` rounds twice)
+and as native builds with clang-cl 22 and MSVC 19.51, plain and with
 `/arch:AVX2`.
 
 `examples/spectrum.goose` finds the tones in a noisy signal, smooths it by convolution, and

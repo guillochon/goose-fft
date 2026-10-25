@@ -41,7 +41,21 @@ struct cv4 { re: v4, im: v4 }
 fn splat(x: f64) -> v4 { v4 { x, x, x, x } }
 fn csplat(re: f64, im: f64) -> cv4 { cv4 { splat(re), splat(im) } }
 
-// v times t, complex, lane by lane.
+// Fused multiply-adds, lane by lane, through math's mul_add: each rounds
+// once where the code is built for FMA (the simd fns' AVX2 and AVX-512
+// versions, and any build for AVX2), and twice elsewhere.
+inline fn fma4(a: v4, b: v4, c: v4) -> v4 {             // a * b + c
+    v4 { mul_add(a.a, b.a, c.a), mul_add(a.b, b.b, c.b), mul_add(a.c, b.c, c.c), mul_add(a.d, b.d, c.d) }
+}
+inline fn fms4(a: v4, b: v4, c: v4) -> v4 {             // a * b - c
+    v4 { mul_add(a.a, b.a, -c.a), mul_add(a.b, b.b, -c.b), mul_add(a.c, b.c, -c.c), mul_add(a.d, b.d, -c.d) }
+}
+inline fn fnma4(a: v4, b: v4, c: v4) -> v4 {            // c - a * b
+    v4 { mul_add(-a.a, b.a, c.a), mul_add(-a.b, b.b, c.b), mul_add(-a.c, b.c, c.c), mul_add(-a.d, b.d, c.d) }
+}
+
+// v times t, complex, lane by lane: two multiplies and two fused
+// multiply-adds.
 inline fn twid(v: cv4, t: cv4) -> cv4 { cv4 { v.re * t.re - v.im * t.im, v.re * t.im + v.im * t.re } }
 
 // ---------------------------------------------------------------------------
@@ -404,8 +418,8 @@ inline fn dft3(a0: cv4, a1: cv4, a2: cv4) -> c3 {
     let sin60 = splat(SIN60);
     let t1r = a1.re + a2.re;
     let t1i = a1.im + a2.im;
-    let t2r = a0.re - half * t1r;
-    let t2i = a0.im - half * t1i;
+    let t2r = fnma4(half, t1r, a0.re);
+    let t2i = fnma4(half, t1i, a0.im);
     let t3r = sin60 * (a1.re - a2.re);
     let t3i = sin60 * (a1.im - a2.im);
     return c3 { cv4 { a0.re + t1r, a0.im + t1i },
@@ -431,14 +445,14 @@ inline fn dft5(a0: cv4, a1: cv4, a2: cv4, a3: cv4, a4: cv4) -> c5 {
     let t3i = a1.im - a4.im;
     let t4r = a2.re - a3.re;
     let t4i = a2.im - a3.im;
-    let m1r = a0.re + c51 * t1r + c52 * t2r;
-    let m1i = a0.im + c51 * t1i + c52 * t2i;
-    let m2r = a0.re + c52 * t1r + c51 * t2r;
-    let m2i = a0.im + c52 * t1i + c51 * t2i;
-    let n1r = s51 * t3r + s52 * t4r;
-    let n1i = s51 * t3i + s52 * t4i;
-    let n2r = s52 * t3r - s51 * t4r;
-    let n2i = s52 * t3i - s51 * t4i;
+    let m1r = fma4(c52, t2r, fma4(c51, t1r, a0.re));
+    let m1i = fma4(c52, t2i, fma4(c51, t1i, a0.im));
+    let m2r = fma4(c51, t2r, fma4(c52, t1r, a0.re));
+    let m2i = fma4(c51, t2i, fma4(c52, t1i, a0.im));
+    let n1r = fma4(s51, t3r, s52 * t4r);
+    let n1i = fma4(s51, t3i, s52 * t4i);
+    let n2r = fms4(s52, t3r, s51 * t4r);
+    let n2i = fms4(s52, t3i, s51 * t4i);
     return c5 { cv4 { a0.re + t1r + t2r, a0.im + t1i + t2i },
                 cv4 { m1r + n1i, m1i - n1r },          // m1 - i n1
                 cv4 { m2r + n2i, m2i - n2r },          // m2 - i n2
@@ -663,7 +677,7 @@ simd fn pass_generic(r: i64, s: i64, m: i64, x: cv4[:], y: cv4[:], w: cv4[:], dm
                 for q in s {
                     let a = ak[q];
                     let v = yt[q];
-                    yt[q] = cv4 { v.re + a.re * c.re - a.im * c.im, v.im + a.re * c.im + a.im * c.re };
+                    yt[q] = cv4 { fnma4(a.im, c.im, fma4(a.re, c.re, v.re)), fma4(a.im, c.re, fma4(a.re, c.im, v.im)) };
                 }
             }
             if t > 0 {
@@ -1107,8 +1121,8 @@ simd fn post_real(y: complex[:], h: i64, tw: cv4[:]) -> i64 {
         let ei = half * (a.im - b.im);
         let or = half * (a.im + b.im);
         let oi = half * (b.re - a.re);
-        let tr = w.re * or - w.im * oi;
-        let ti = w.re * oi + w.im * or;
+        let tr = fms4(w.re, or, w.im * oi);
+        let ti = fma4(w.re, oi, w.im * or);
         store4(fa, cv4 { er + tr, ei + ti });
         store4(fb, reversed(cv4 { er - tr, ti - ei }));
         k += 4;
@@ -1135,8 +1149,8 @@ simd fn pre_real(x: complex[:], z: complex[:], h: i64, tw: cv4[:]) -> i64 {
         let ei = half * (a.im - b.im);
         let dr = half * (a.re - b.re);
         let di = half * (a.im + b.im);
-        let or = dr * w.re + di * w.im;
-        let oi = di * w.re - dr * w.im;
+        let or = fma4(dr, w.re, di * w.im);
+        let oi = fms4(di, w.re, dr * w.im);
         store4(za, cv4 { er - oi, ei + or });
         store4(zb, reversed(cv4 { er + oi, or - ei }));
         k += 4;

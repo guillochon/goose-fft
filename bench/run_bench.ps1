@@ -26,7 +26,7 @@ if ($Only -eq "" -or $Only -eq "goose") {
     # Build failing loudly: a stale executable would quietly measure old code.
     $exe = "$here\bench_$Label.exe"
     Remove-Item $exe -ErrorAction SilentlyContinue
-    if ($Flags) { $env:CL = $Flags } else { Remove-Item Env:CL -ErrorAction SilentlyContinue }
+    if ($Flags -and $Flags -ne "none") { $env:CL = $Flags } else { Remove-Item Env:CL -ErrorAction SilentlyContinue }
     & $goose build -o $exe "$here\bench.goose" | Out-Null
     Remove-Item Env:CL -ErrorAction SilentlyContinue
     if (-not (Test-Path $exe)) { throw "building bench.goose failed" }
