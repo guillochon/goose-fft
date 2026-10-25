@@ -21,3 +21,4 @@ Thumbs.db
 bench/*.csv
 bench/log_*.txt
 bench/third_party/
+bench/*.png

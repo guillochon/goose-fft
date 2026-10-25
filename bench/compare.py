@@ -35,38 +35,41 @@ refs = [("FFTW measure", fftw), ("FFTW patient", load("bench_fftw_patient.csv"))
 refs = [(name, data) for name, data in refs if data]
 
 
-def mflops(kind, n, t):
-    return 5 * n * math.log2(n) / (2 if kind == "rfft" else 1) / t / 1e6
+def gflops(kind, n, t):
+    return 5 * n * math.log2(n) / (2 if kind == "rfft" else 1) / t / 1e9
 
 
 cols = [(f"goose {label}", data) for label, data in goose.items() if data] + refs
-keys = [k for k in now if fftw and k in fftw] if fftw else list(now)
-print(f"{'kind':5}{'n':>9} " + " ".join(f"{name[:12]:>13}" for name, _ in cols) + f" {'vs FFTW':>8} {'GF/s':>6}")
-for k in keys:
+print(f"{'kind':5}{'n':>9} " + " ".join(f"{name[:12]:>13}" for name, _ in cols)
+      + f" {'vs FFTW':>8} {'vs SciPy':>9} {'GF/s':>6}")
+scipy = dict(refs).get("SciPy")
+for k in now:
     kind, n = k
     line = f"{kind:5}{n:9} " + " ".join(f"{data[k] * 1e6:11.3f}us" if k in data else f"{'-':>13}" for _, data in cols)
-    if fftw and k in fftw:
-        line += f" {now[k] / fftw[k]:7.2f}x"
-    line += f" {mflops(kind, n, now[k]) / 1e3:6.1f}"
+    line += f" {now[k] / fftw[k]:7.2f}x" if fftw and k in fftw else f" {'-':>8}"
+    line += f" {now[k] / scipy[k]:8.2f}x" if scipy and k in scipy else f" {'-':>9}"
+    line += f" {gflops(kind, n, now[k]):6.1f}"
     print(line)
 
 fig, ax = plt.subplots(1, 2, figsize=(13, 5.2))
-for kind, marker in [("fft", "o"), ("rfft", "s")]:
+styles = {"Goose fft": ("C3", "o-", 2.6), "FFTW measure": ("C0", "s-", 1.4), "FFTW patient": ("C0", "s:", 1.2),
+          "NumPy": ("C2", "^-", 1.2), "SciPy": ("C1", "v-", 1.2)}
+for a, kind, title in [(ax[0], "fft", "complex"), (ax[1], "rfft", "real")]:
     ns = sorted(n for kd, n in now if kd == kind and n & (n - 1) == 0)
-    if not ns:
-        continue
-    for i, (name, data) in enumerate([(f"Goose fft", now)] + refs):
-        pts = [(n, mflops(kind, n, data[(kind, n)]) / 1e3) for n in ns if (kind, n) in data]
+    for name, data in [("Goose fft", now)] + refs:
+        pts = [(n, gflops(kind, n, data[(kind, n)])) for n in ns if (kind, n) in data]
         if pts:
-            ax[0 if kind == "fft" else 1].plot(*zip(*pts), marker + "-", label=name,
-                                                lw=2.5 if i == 0 else 1.2)
-for a, kind in zip(ax, ["complex", "real"]):
-    a.set(xscale="log", xlabel="n (power of two)", ylabel="GFLOP/s (5 n log2 n / t" + (", halved)" if kind == "real" else ")"),
-          title=f"{kind} forward transform, 1 thread")
+            color, style, lw = styles[name]
+            a.plot(*zip(*pts), style, color=color, lw=lw, label=name)
+    a.set(xscale="log", xlabel="n (power of two)",
+          ylabel="GFLOP/s, " + ("2.5 n log2 n / t" if kind == "rfft" else "5 n log2 n / t"),
+          title=f"{title} forward transform, one thread")
     a.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"$2^{{{int(round(math.log2(v)))}}}$"))
+    a.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    a.set_ylim(bottom=0)
     a.legend(fontsize=8)
     a.grid(alpha=0.3)
-fig.suptitle("Goose fft vs FFTW 3.3.10 and pocketfft (NumPy/SciPy), clang-cl 22 /O2 /arch:AVX2, i5-12600K P-core")
+fig.suptitle("Goose fft vs FFTW 3.3.10 and pocketfft (NumPy/SciPy); clang-cl 22 /O2 /arch:AVX2, i5-12600K P-core")
 fig.tight_layout()
 fig.savefig("compare.png", dpi=110)
 print("wrote compare.png")

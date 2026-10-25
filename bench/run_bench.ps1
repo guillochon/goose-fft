@@ -7,8 +7,8 @@
 #
 # Writes bench_goose_<label>.csv, bench_fftw.csv (FFTW_MEASURE plans),
 # bench_fftw_patient.csv (FFTW_PATIENT) and bench_ref_numpy.csv /
-# bench_ref_scipy.csv. FFTW comes from bench\third_party (see
-# bench\third_party\README.md for how it is built).
+# bench_ref_scipy.csv. bench_fftw.exe is built by get_fftw.ps1, which
+# fetches and builds FFTW into bench\third_party.
 param([int]$Core = 4, [string]$Label = "now", [string]$Only = "", [string]$Flags = "/arch:AVX2")
 
 $here = $PSScriptRoot
@@ -26,7 +26,7 @@ if ($Only -eq "" -or $Only -eq "goose") {
     # Build failing loudly: a stale executable would quietly measure old code.
     $exe = "$here\bench_$Label.exe"
     Remove-Item $exe -ErrorAction SilentlyContinue
-    $env:CL = $Flags
+    if ($Flags) { $env:CL = $Flags } else { Remove-Item Env:CL -ErrorAction SilentlyContinue }
     & $goose build -o $exe "$here\bench.goose" | Out-Null
     Remove-Item Env:CL -ErrorAction SilentlyContinue
     if (-not (Test-Path $exe)) { throw "building bench.goose failed" }
