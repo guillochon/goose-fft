@@ -806,9 +806,19 @@ inline fn twiddle_transpose_in(p, c0: i64, w: i64, a: cv4[:], z: cv4[:]) {
             for u in 4 {
                 let k2 = 4 * gk + u;
                 if k2 < n2 {
-                    let v = twid(a[q + w * k2], tw[k2]);
-                    er[u] = v.re.a; er[4 + u] = v.re.b; er[8 + u] = v.re.c; er[12 + u] = v.re.d;
-                    ei[u] = v.im.a; ei[4 + u] = v.im.b; ei[8 + u] = v.im.c; ei[12 + u] = v.im.d;
+                    // Lane by lane in scalars: each result goes to its own
+                    // place in er and ei, which whole-v4 arithmetic would
+                    // only have to take apart again.
+                    let v = a[q + w * k2];
+                    let t = tw[k2];
+                    er[u] = v.re.a * t.re.a - v.im.a * t.im.a;
+                    ei[u] = v.re.a * t.im.a + v.im.a * t.re.a;
+                    er[4 + u] = v.re.b * t.re.b - v.im.b * t.im.b;
+                    ei[4 + u] = v.re.b * t.im.b + v.im.b * t.re.b;
+                    er[8 + u] = v.re.c * t.re.c - v.im.c * t.im.c;
+                    ei[8 + u] = v.re.c * t.im.c + v.im.c * t.re.c;
+                    er[12 + u] = v.re.d * t.re.d - v.im.d * t.im.d;
+                    ei[12 + u] = v.re.d * t.im.d + v.im.d * t.re.d;
                 }
             }
             // Row j1 = 4g + l of zt gets lane l of the four.
