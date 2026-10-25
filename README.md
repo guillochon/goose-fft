@@ -5,7 +5,7 @@ build step, nothing to install. Complex and real transforms of any length, 2-D t
 usual helpers (`fftfreq`, `fftshift`, `convolve`).
 
 ```goose
-import fft from "guillochon/goose-fft@v0.1.0";   // or from "../goose-fft" for a local checkout
+import fft from "guillochon/goose-fft@main";   // or from "../goose-fft" for a local checkout
 
 fn main() {
     let x: f64[] = [1.0, 2.0, 1.0, -1.0, 1.5, 0.0, -2.0, 0.5];
@@ -15,8 +15,9 @@ fn main() {
 }
 ```
 
-Goose fetches the package the first time a program uses it. Pin a tag, as here, or a commit
-(`"guillochon/goose-fft@<commit>"`).
+Goose fetches the package the first time a program uses it. There is no tagged release yet: pin a
+commit (`"guillochon/goose-fft@<commit>"`) for a reproducible build, since a branch like `@main` is
+pinned at whatever was fetched first, until `goose fetch --update`.
 
 **Requires `math::mul_add`**, which Goose gains with
 [aardappel/goose#79](https://github.com/aardappel/goose/pull/79) and no release has yet. Until one
