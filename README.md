@@ -20,12 +20,17 @@ commit (`"guillochon/goose-fft@<commit>"`) for a reproducible build, since a bra
 pinned at whatever was fetched first, until `goose fetch --update`.
 
 **Requires `math::mul_add`**, which Goose gains with
-[aardappel/goose#79](https://github.com/aardappel/goose/pull/79) and no release has yet. Until one
-does, build Goose from that branch:
+[aardappel/goose#79](https://github.com/aardappel/goose/pull/79) and no release has yet.
+[aardappel/goose#83](https://github.com/aardappel/goose/pull/83), stacked on it, makes this library
+1.2–1.6× faster at most lengths up to 16,384 points, with no change to its source (see Performance).
+Until they're released, build Goose from #83's branch, which has both:
 
 ```bash
-git clone -b mul-add https://github.com/guillochon/goose
+git clone -b vector-elemwise https://github.com/guillochon/goose
 ```
+
+On #79's branch alone (`-b mul-add`) everything works, at the speeds of the vectors-off column
+below.
 
 ## Conventions
 
@@ -71,9 +76,11 @@ git clone -b mul-add https://github.com/guillochon/goose
   that are transformed.
 - **Four columns at a time.** Every step transforms four columns at once, one per lane of a `v4`,
   a struct of four `f64`s that Goose adds and multiplies elementwise. Real and imaginary parts sit
-  in separate `v4`s, side by side in a `cv4`, so a butterfly is a few whole-`v4` operations,
-  which the C compiler turns into AVX2 instructions as written. A length that doesn't divide into
-  groups of four leaves some lanes idle rather than taking a slow path.
+  in separate `v4`s, side by side in a `cv4`, so a butterfly is a few whole-`v4` operations.
+  With #83, Goose emits each of those as one vector operation where the C compiler has vector
+  extensions (clang, gcc); without it, clang's SLP vectorizer has to rediscover the vectors,
+  which it only partly does. A length that doesn't divide into groups of four leaves some lanes
+  idle rather than taking a slow path.
 - **Columns in cache.** Columns go through the passes in blocks sized to stay in L1/L2 (256
   `cv4`s for lengths up to 65,536, then up to 8,192, so that long transforms read memory in long
   runs). The Stockham passes autosort, so no bit-reversal pass is needed.
@@ -120,13 +127,13 @@ ahead of MSVC; `GOOSE_CC` or `--cc` picks another.
 | CPU | Intel Core i5-12600K (Alder Lake): 6 performance cores, 3.7 GHz base, 4.9 GHz turbo, 48 KB L1d and 1.25 MB L2 each; 20 MB shared L3 |
 | Memory | 32 GB DDR5-6200 |
 | OS | Windows 11 Home 23H2 (build 22631), High performance power plan |
-| Goose | built from [aardappel/goose#79](https://github.com/aardappel/goose/pull/79) (commit 3d03680, adding `math::mul_add`), compiling with clang-cl 22.1.3 (Visual Studio 2026) and `/O2 /arch:AVX2`. A plain `goose build` measured within 8% of that at every length. |
+| Goose | built from [aardappel/goose#83](https://github.com/aardappel/goose/pull/83) (commit caa10207, on top of #79's `math::mul_add`), compiling with clang-cl 22.1.3 (Visual Studio 2026) and `/O2 /arch:AVX2`. A plain `goose build` measured within 7% of that at every length. |
 | FFTW | 3.3.10, built from source by the same clang-cl with `/O2 /arch:AVX2` and FFTW's AVX, AVX2 and FMA kernels (`bench/get_fftw.ps1`), out-of-place `FFTW_MEASURE` plans |
 | pocketfft | NumPy 2.2.6 and SciPy 1.16.0 on Python 3.12, `scipy.fft` with `workers=1` |
 | Pinning | Every run on logical CPU 4, a performance core |
 
 Every time is the best of at least five samples and 0.2 s, each sample enough calls to take about
-a millisecond. Transforms go into a preallocated output with a plan made beforehand, as FFTW is
+a millisecond. The Goose times are the best of three such runs. Transforms go into a preallocated output with a plan made beforehand, as FFTW is
 timed; planning time isn't counted. NumPy and SciPy pay about 2.5 µs of Python call overhead per
 transform, which dominates their short lengths.
 
@@ -135,31 +142,42 @@ transform, which dominates their short lengths.
 GFLOP/s are FFTW's convention, 5 n log₂ n / t (half that for real transforms), whatever the length.
 Times in µs, single-threaded:
 
-| n | Goose | FFTW | NumPy | SciPy | Goose / FFTW |
-|---|---|---|---|---|---|
-| **complex** | | | | | |
-| 64 | 0.150 | 0.039 | 3.12 | 2.67 | 3.9× |
-| 1,024 | 2.75 | 0.95 | 8.43 | 6.15 | 2.9× |
-| 4,096 | 12.1 | 5.77 | 26.0 | 18.4 | 2.1× |
-| 65,536 | 295 | 197 | 998 | 760 | 1.5× |
-| 2²⁰ | 7,921 | 6,356 | 20,053 | 16,783 | 1.2× |
-| 1,000 | 2.84 | 1.14 | 8.81 | 5.96 | 2.5× |
-| 100,000 | 525 | 271 | 1,529 | 1,107 | 1.9× |
-| 1,000,000 | 7,593 | 6,912 | 17,338 | 13,402 | 1.1× |
-| 1,009 (prime) | 16.5 | 13.2 | 42.7 | 26.3 | 1.3× |
-| 10,007 (prime) | 195 | 125 | 679 | 263 | 1.6× |
-| **real** | | | | | |
-| 1,024 | 1.59 | 0.52 | 6.44 | 4.81 | 3.1× |
-| 65,536 | 143 | 82.9 | 509 | 456 | 1.7× |
-| 2²⁰ | 4,009 | 2,858 | 10,623 | 9,830 | 1.4× |
-| 1,000,000 | 3,826 | 2,788 | 9,598 | 9,062 | 1.4× |
+| n | Goose | Goose, vectors off | FFTW | NumPy | SciPy | Goose / FFTW |
+|---|---|---|---|---|---|---|
+| **complex** | | | | | | |
+| 64 | 0.096 | 0.150 | 0.039 | 3.12 | 2.67 | 2.5× |
+| 1,024 | 2.10 | 2.70 | 0.95 | 8.43 | 6.15 | 2.2× |
+| 4,096 | 9.25 | 11.9 | 5.77 | 26.0 | 18.4 | 1.6× |
+| 65,536 | 256 | 299 | 197 | 998 | 760 | 1.3× |
+| 2²⁰ | 7,646 | 7,930 | 6,356 | 20,053 | 16,783 | 1.2× |
+| 1,000 | 2.41 | 2.78 | 1.14 | 8.81 | 5.96 | 2.1× |
+| 100,000 | 475 | 509 | 271 | 1,529 | 1,107 | 1.75× |
+| 1,000,000 | 7,788 | 7,582 | 6,912 | 17,338 | 13,402 | 1.1× |
+| 1,009 (prime) | 13.9 | 16.6 | 13.2 | 42.7 | 26.3 | 1.06× |
+| 10,007 (prime) | 166 | 195 | 125 | 679 | 263 | 1.3× |
+| **real** | | | | | | |
+| 1,024 | 1.17 | 1.59 | 0.52 | 6.44 | 4.81 | 2.25× |
+| 65,536 | 124 | 143 | 82.9 | 509 | 456 | 1.5× |
+| 2²⁰ | 3,832 | 3,968 | 2,858 | 10,623 | 9,830 | 1.3× |
+| 1,000,000 | 3,857 | 3,862 | 2,788 | 9,598 | 9,062 | 1.4× |
+
+"Vectors off" is the same compiler and source built with `-DGS_VEC=0`, which keeps #83's vector
+form out: what #79 alone gives.
 
 In short:
-- **Against pocketfft through NumPy and SciPy**, Goose is faster at every length measured, 1.3–3.8×
+- **Against pocketfft through NumPy and SciPy**, Goose is faster at every length measured, 1.6–3.8×
   at lengths of 4,096 and up, where Python's call overhead no longer matters.
-- **Against FFTW**, Goose takes 1.1–1.7× FFTW's time on long transforms (2¹⁶ points and up) and
-  2–4× on short ones. FFTW's codelets keep transforms of up to 64 points in registers; in Goose
-  those take passes through memory, as long straight-line codelets compile poorly (see below).
+- **Against FFTW**, Goose takes 1.1–1.75× FFTW's time on long transforms (2¹⁶ points and up), and
+  up to 4.6× on short ones (2.2× at 1,024, 1.6× at 4,096). FFTW's codelets keep transforms of up to 64 points in
+  registers; in Goose those take passes through memory, as long straight-line codelets compile
+  poorly (see below).
+
+**What vector arithmetic gained.** With #83, the radix-8 pass's AVX2 code went from 208 two-lane
+operations next to 175 four-lane ones to 12 next to 261, with a third fewer spills and no shuffles.
+Against the same compiler with vectors off: 1.24–1.56× from 16 to 256 points, 1.29–1.31× from
+1,024 to 16,384, 1.13–1.17× at 65,536 and 262,144, and even at 2²⁰ and 10⁶, which are bound by
+memory. Mixed-radix lengths gained 1.07–1.22× and the primes 1.17–1.19×; real transforms
+1.0–1.4×. No length is slower beyond noise (the worst is 0.97×).
 
 **What FMA gained.** Against the same code with every `mul_add` written as a multiply and an add,
 on the same compiler: mixed-radix lengths (factors of 3 and 5) ran 4–9% faster as complex
@@ -180,6 +198,7 @@ How it got here, at n = 4,096 complex (FFTW: 5.8 µs):
 | Real and imaginary side by side (`cv4`), radix 8 | 12.6 | Half the pointers per pass, and radix 8 does 1.5× the work per load and store of radix 4. |
 | Small generated codelets, one kernel for lengths up to 64 | 11.8 | The 16- to 64-point codelets compiled to code with thousands of spills and scalar operations (clang's SLP vectorizer gives up on long blocks), so only those up to 8 points are used. |
 | `math::mul_add` in the odd radices, real passes and codelets | 12.1 | Unchanged here (within noise); 4–20% at mixed-radix lengths. |
+| Goose with #83: struct arithmetic as whole-vector operations | 9.25 | No source change; one transpose loop that computed a whole `cv4` and then took it apart lane by lane was rewritten per lane first, as it would otherwise have lost 10% at some mixed lengths. |
 
 Tried and dropped: fusing step A's first pass with the load of x and step B's last pass with the
 store of y (20–45% slower: the extra strided loads inside the radix-8 butterfly cost more registers
